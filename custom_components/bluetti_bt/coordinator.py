@@ -46,7 +46,7 @@ class PollingCoordinator(DataUpdateCoordinator):
         self.reader = DeviceReader(
             config.address,
             bluetti_device,
-            self.hass.loop.create_future,
+            asyncio.get_running_loop().create_future,
             DeviceReaderConfig(
                 config.polling_timeout,
                 config.use_encryption,

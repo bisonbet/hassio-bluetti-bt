@@ -4,7 +4,6 @@ from __future__ import annotations
 from enum import Enum
 import logging
 from decimal import Decimal
-from typing import List
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -29,13 +28,13 @@ async def async_setup_entry(
     config = FullDeviceConfig.from_dict(entry.data)
     coordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
 
+    if config is None or not isinstance(coordinator, PollingCoordinator):
+        logging.getLogger(__name__).error("No coordinator found")
+        return None
+
     logger = logging.getLogger(
         f"{__name__}.{mac_loggable(config.address).replace(':', '_')}"
     )
-
-    if config is None or not isinstance(coordinator, PollingCoordinator):
-        logger.error("No coordinator found")
-        return None
 
     # Generate device info
     logger.info("Creating sensors for device with address %s", config.address)
@@ -275,7 +274,7 @@ class BluettiSensor(CoordinatorEntity, SensorEntity):
             and not isinstance(response_data, Decimal)
             and not isinstance(response_data, Enum)
             and not isinstance(response_data, str)
-            and not isinstance(response_data, List)
+            and not isinstance(response_data, list)
         ):
             self._logger.warning(
                 "Invalid response data type from coordinator (sensor.%s): %s has type %s",
@@ -286,7 +285,7 @@ class BluettiSensor(CoordinatorEntity, SensorEntity):
             self._set_unavailable("Invalid data type")
             return
 
-        if isinstance(response_data, List) and len(response_data) < self._cell_num:
+        if isinstance(response_data, list) and len(response_data) < self._cell_num:
             self._set_unavailable("Invalid list length")
             return
 
@@ -296,7 +295,7 @@ class BluettiSensor(CoordinatorEntity, SensorEntity):
         if isinstance(response_data, Enum):
             # Enum
             self._attr_native_value = response_data.name
-        elif isinstance(response_data, List):
+        elif isinstance(response_data, list):
             self._attr_native_value = response_data[self._cell_num - 1]
         else:
             # Numeric
