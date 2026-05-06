@@ -18,6 +18,7 @@ class FullDeviceConfig:
         self.polling_timeout = optional.polling_timeout
         self.max_retries = optional.max_retries
         self.dc_input_energy_enabled = optional.dc_input_energy_enabled
+        self.battery_energy_enabled = optional.battery_energy_enabled
 
     @staticmethod
     def from_dict(raw: Dict[str, Any]):

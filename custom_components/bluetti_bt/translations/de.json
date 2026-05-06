@@ -18,7 +18,8 @@
           "polling_interval": "Datenabruf-Intervall in Sekunden (Neustart erforderlich)",
           "polling_timeout": "Datenabruf-Timeout in Sekunden (Neustart erforderlich)",
           "max_retries": "Maximale Verbindungsversuche (Neustart erforderlich)",
-          "dc_input_energy_enabled": "DC Eingang Energie Sensor anzeigen (kWh, für das Energie-Dashboard geeignet)"
+          "dc_input_energy_enabled": "DC Eingang Energie Sensor anzeigen (kWh, für das Energie-Dashboard geeignet)",
+          "battery_energy_enabled": "Akkuleistung und Lade-/Entladeenergie-Sensoren anzeigen (berechnet, für das Energie-Dashboard geeignet)"
         }
       }
     },
@@ -86,6 +87,15 @@
       },
       "ac_p3_voltage": {
         "name": "AC Phase 3 Spannung"
+      },
+      "battery_charge_energy": {
+        "name": "Akku Ladeenergie"
+      },
+      "battery_discharge_energy": {
+        "name": "Akku Entladeenergie"
+      },
+      "battery_power": {
+        "name": "Akkuleistung"
       },
       "total_battery_percent": {
         "name": "Batterie Ladestand"

@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -30,6 +30,31 @@ from .types import get_device_class, get_state_class, get_category
 # Skip integration when the gap between samples exceeds this many polling intervals
 # (avoids inflating the running total across disconnects).
 _DC_ENERGY_MAX_GAP_FACTOR = 5
+
+_BATTERY_POWER_FIELDS = (
+    FieldName.DC_INPUT_POWER,
+    FieldName.AC_INPUT_POWER,
+    FieldName.AC_OUTPUT_POWER,
+    FieldName.DC_OUTPUT_POWER,
+)
+
+
+def _power_value(data: dict, key: str) -> float | None:
+    v = data.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _battery_power(data: dict) -> float | None:
+    """Derived battery power, in W. Positive = charging, negative = discharging."""
+    dc_in = _power_value(data, FieldName.DC_INPUT_POWER.value)
+    ac_in = _power_value(data, FieldName.AC_INPUT_POWER.value)
+    ac_out = _power_value(data, FieldName.AC_OUTPUT_POWER.value)
+    dc_out = _power_value(data, FieldName.DC_OUTPUT_POWER.value)
+    if dc_in is None or ac_in is None or ac_out is None or dc_out is None:
+        return None
+    return (dc_in + ac_in) - (ac_out + dc_out)
 
 
 async def async_setup_entry(
@@ -61,9 +86,12 @@ async def async_setup_entry(
     if config.use_encryption:
         sensor_fields = sensor_fields + bluetti_device.get_select_fields()
 
-    has_dc_input_power = any(
-        FieldName(f.name) == FieldName.DC_INPUT_POWER for f in sensor_fields
+    available_field_names = {FieldName(f.name) for f in sensor_fields}
+    has_dc_input_power = FieldName.DC_INPUT_POWER in available_field_names
+    has_all_battery_power_fields = all(
+        f in available_field_names for f in _BATTERY_POWER_FIELDS
     )
+
     if config.dc_input_energy_enabled and has_dc_input_power:
         sensors_to_add.append(
             BluettiDcInputEnergySensor(
@@ -72,6 +100,25 @@ async def async_setup_entry(
                 config.polling_interval,
                 logger=logger,
             )
+        )
+
+    if config.battery_energy_enabled and has_all_battery_power_fields:
+        sensors_to_add.extend(
+            [
+                BluettiBatteryPowerSensor(coordinator, device_info, logger=logger),
+                BluettiBatteryChargeEnergySensor(
+                    coordinator,
+                    device_info,
+                    config.polling_interval,
+                    logger=logger,
+                ),
+                BluettiBatteryDischargeEnergySensor(
+                    coordinator,
+                    device_info,
+                    config.polling_interval,
+                    logger=logger,
+                ),
+            ]
         )
 
     for field in sensor_fields:
@@ -328,11 +375,10 @@ class BluettiSensor(CoordinatorEntity, SensorEntity):
         self.async_write_ha_state()
 
 
-class BluettiDcInputEnergySensor(CoordinatorEntity, RestoreSensor):
-    """Cumulative DC input energy derived from dc_input_power (trapezoidal integration)."""
+class _BluettiAccumulatingEnergySensor(CoordinatorEntity, RestoreSensor):
+    """Trapezoidal-integration energy sensor, persists across restarts."""
 
     _attr_has_entity_name = True
-    _attr_translation_key = "dc_input_energy"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -343,12 +389,15 @@ class BluettiDcInputEnergySensor(CoordinatorEntity, RestoreSensor):
         coordinator: PollingCoordinator,
         device_info: DeviceInfo,
         polling_interval: int,
+        translation_key: str,
+        unique_suffix: str,
         logger: logging.Logger = logging.getLogger(),
     ):
         super().__init__(coordinator)
         self._attr_device_info = device_info
+        self._attr_translation_key = translation_key
         self._attr_unique_id = get_unique_id(
-            f"{device_info.get('name')} dc_input_energy"
+            f"{device_info.get('name')} {unique_suffix}"
         )
         self._logger = logger
         self._max_gap_seconds = max(
@@ -358,6 +407,9 @@ class BluettiDcInputEnergySensor(CoordinatorEntity, RestoreSensor):
         self._last_ts: datetime | None = None
         self._total_kwh: float = 0.0
         self._attr_native_value = 0.0
+
+    def _compute_power(self, data: dict) -> float | None:
+        raise NotImplementedError
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -376,18 +428,130 @@ class BluettiDcInputEnergySensor(CoordinatorEntity, RestoreSensor):
         data = self.coordinator.data
         if not isinstance(data, dict):
             return
-        power = data.get(FieldName.DC_INPUT_POWER.value)
-        if not isinstance(power, (int, float)) or isinstance(power, bool):
+        power = self._compute_power(data)
+        if power is None:
             return
 
         now = dt_util.utcnow()
         if self._last_power is not None and self._last_ts is not None:
             dt_seconds = (now - self._last_ts).total_seconds()
             if 0 < dt_seconds <= self._max_gap_seconds:
-                avg_w = (self._last_power + float(power)) / 2.0
+                avg_w = (self._last_power + power) / 2.0
                 self._total_kwh += (avg_w * dt_seconds) / 3_600_000.0
 
         self._last_power = float(power)
         self._last_ts = now
         self._attr_native_value = round(self._total_kwh, 3)
+        self.async_write_ha_state()
+
+
+class BluettiDcInputEnergySensor(_BluettiAccumulatingEnergySensor):
+    """Cumulative DC input energy derived from dc_input_power."""
+
+    def __init__(
+        self,
+        coordinator: PollingCoordinator,
+        device_info: DeviceInfo,
+        polling_interval: int,
+        logger: logging.Logger = logging.getLogger(),
+    ):
+        super().__init__(
+            coordinator,
+            device_info,
+            polling_interval,
+            translation_key="dc_input_energy",
+            unique_suffix="dc_input_energy",
+            logger=logger,
+        )
+
+    def _compute_power(self, data: dict) -> float | None:
+        return _power_value(data, FieldName.DC_INPUT_POWER.value)
+
+
+class BluettiBatteryChargeEnergySensor(_BluettiAccumulatingEnergySensor):
+    """Cumulative energy charged into the battery (derived)."""
+
+    def __init__(
+        self,
+        coordinator: PollingCoordinator,
+        device_info: DeviceInfo,
+        polling_interval: int,
+        logger: logging.Logger = logging.getLogger(),
+    ):
+        super().__init__(
+            coordinator,
+            device_info,
+            polling_interval,
+            translation_key="battery_charge_energy",
+            unique_suffix="battery_charge_energy",
+            logger=logger,
+        )
+
+    def _compute_power(self, data: dict) -> float | None:
+        p = _battery_power(data)
+        if p is None:
+            return None
+        return max(p, 0.0)
+
+
+class BluettiBatteryDischargeEnergySensor(_BluettiAccumulatingEnergySensor):
+    """Cumulative energy discharged from the battery (derived)."""
+
+    def __init__(
+        self,
+        coordinator: PollingCoordinator,
+        device_info: DeviceInfo,
+        polling_interval: int,
+        logger: logging.Logger = logging.getLogger(),
+    ):
+        super().__init__(
+            coordinator,
+            device_info,
+            polling_interval,
+            translation_key="battery_discharge_energy",
+            unique_suffix="battery_discharge_energy",
+            logger=logger,
+        )
+
+    def _compute_power(self, data: dict) -> float | None:
+        p = _battery_power(data)
+        if p is None:
+            return None
+        return max(-p, 0.0)
+
+
+class BluettiBatteryPowerSensor(CoordinatorEntity, SensorEntity):
+    """Instantaneous battery power (derived). Positive = charging, negative = discharging."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "battery_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_suggested_display_precision = 1
+
+    def __init__(
+        self,
+        coordinator: PollingCoordinator,
+        device_info: DeviceInfo,
+        logger: logging.Logger = logging.getLogger(),
+    ):
+        super().__init__(coordinator)
+        self._attr_device_info = device_info
+        self._attr_unique_id = get_unique_id(
+            f"{device_info.get('name')} battery_power"
+        )
+        self._logger = logger
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if not self.coordinator.last_update_success:
+            return
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return
+        p = _battery_power(data)
+        if p is None:
+            return
+        self._attr_native_value = round(p, 1)
         self.async_write_ha_state()

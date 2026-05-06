@@ -18,7 +18,8 @@
           "polling_interval": "Polling interval in seconds (restart required)",
           "polling_timeout": "Polling timeout in seconds (restart required)",
           "max_retries": "Maximum amount of connection retries (restart required)",
-          "dc_input_energy_enabled": "Expose DC Input Energy sensor (kWh, suitable for the Energy dashboard)"
+          "dc_input_energy_enabled": "Expose DC Input Energy sensor (kWh, suitable for the Energy dashboard)",
+          "battery_energy_enabled": "Expose derived Battery Power and Charge/Discharge Energy sensors (suitable for the Energy dashboard)"
         }
       }
     },
@@ -86,6 +87,15 @@
       },
       "ac_p3_voltage": {
         "name": "AC Phase 3 Voltage"
+      },
+      "battery_charge_energy": {
+        "name": "Battery Charge Energy"
+      },
+      "battery_discharge_energy": {
+        "name": "Battery Discharge Energy"
+      },
+      "battery_power": {
+        "name": "Battery Power"
       },
       "total_battery_percent": {
         "name": "Battery SOC"
