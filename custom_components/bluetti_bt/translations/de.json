@@ -17,7 +17,8 @@
         "data": {
           "polling_interval": "Datenabruf-Intervall in Sekunden (Neustart erforderlich)",
           "polling_timeout": "Datenabruf-Timeout in Sekunden (Neustart erforderlich)",
-          "max_retries": "Maximale Verbindungsversuche (Neustart erforderlich)"
+          "max_retries": "Maximale Verbindungsversuche (Neustart erforderlich)",
+          "dc_input_energy_enabled": "DC Eingang Energie Sensor anzeigen (kWh, für das Energie-Dashboard geeignet)"
         }
       }
     },
@@ -127,6 +128,9 @@
       },
       "dc_input_current": {
         "name": "DC Eingang Stromstärke"
+      },
+      "dc_input_energy": {
+        "name": "DC Eingang Energie"
       },
       "dc_input_power": {
         "name": "DC Eingang Leistung"

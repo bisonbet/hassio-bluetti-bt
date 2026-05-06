@@ -4,6 +4,7 @@ import voluptuous as vol
 CONF_POLLING_INTERVAL = "polling_interval"
 CONF_POLLING_TIMEOUT = "polling_timeout"
 CONF_MAX_RETRIES = "max_retries"
+CONF_DC_INPUT_ENERGY = "dc_input_energy_enabled"
 
 ABORT_REASON_INTERVAL = "invalid_interval"
 ABORT_REASON_TIMEOUT = "invalid_timeout"
@@ -16,10 +17,12 @@ class OptionalDeviceConfig:
         polling_interval: int,
         polling_timeout: int,
         max_retries: int,
+        dc_input_energy_enabled: bool,
     ):
         self.polling_interval = polling_interval
         self.polling_timeout = polling_timeout
         self.max_retries = max_retries
+        self.dc_input_energy_enabled = dc_input_energy_enabled
 
     @staticmethod
     def from_dict(raw: Dict[str, Any]):
@@ -27,6 +30,7 @@ class OptionalDeviceConfig:
             raw.get(CONF_POLLING_INTERVAL, 20),
             raw.get(CONF_POLLING_TIMEOUT, 45),
             raw.get(CONF_MAX_RETRIES, 5),
+            raw.get(CONF_DC_INPUT_ENERGY, True),
         )
 
     def validate(self) -> str | None:
@@ -44,6 +48,7 @@ class OptionalDeviceConfig:
             CONF_POLLING_INTERVAL: self.polling_interval,
             CONF_POLLING_TIMEOUT: self.polling_timeout,
             CONF_MAX_RETRIES: self.max_retries,
+            CONF_DC_INPUT_ENERGY: self.dc_input_energy_enabled,
         }
 
     @property
@@ -62,5 +67,9 @@ class OptionalDeviceConfig:
                     CONF_MAX_RETRIES,
                     default=self.max_retries,
                 ): int,
+                vol.Required(
+                    CONF_DC_INPUT_ENERGY,
+                    default=self.dc_input_energy_enabled,
+                ): bool,
             }
         )

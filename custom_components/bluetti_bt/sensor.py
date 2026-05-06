@@ -4,13 +4,21 @@ from __future__ import annotations
 from enum import Enum
 import logging
 from decimal import Decimal
-from homeassistant.components.sensor import SensorEntity
+from datetime import datetime
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 from bluetti_bt_lib import build_device, FieldName, get_unit
 
 from . import device_info as dev_info, get_unique_id, FullDeviceConfig
@@ -18,6 +26,10 @@ from .const import DATA_COORDINATOR, DOMAIN, MANUFACTURER
 from .coordinator import PollingCoordinator
 from .utils import mac_loggable, unique_id_logable
 from .types import get_device_class, get_state_class, get_category
+
+# Skip integration when the gap between samples exceeds this many polling intervals
+# (avoids inflating the running total across disconnects).
+_DC_ENERGY_MAX_GAP_FACTOR = 5
 
 
 async def async_setup_entry(
@@ -48,6 +60,19 @@ async def async_setup_entry(
 
     if config.use_encryption:
         sensor_fields = sensor_fields + bluetti_device.get_select_fields()
+
+    has_dc_input_power = any(
+        FieldName(f.name) == FieldName.DC_INPUT_POWER for f in sensor_fields
+    )
+    if config.dc_input_energy_enabled and has_dc_input_power:
+        sensors_to_add.append(
+            BluettiDcInputEnergySensor(
+                coordinator,
+                device_info,
+                config.polling_interval,
+                logger=logger,
+            )
+        )
 
     for field in sensor_fields:
         field_name = FieldName(field.name)
@@ -300,4 +325,69 @@ class BluettiSensor(CoordinatorEntity, SensorEntity):
         else:
             # Numeric
             self._attr_native_value = response_data
+        self.async_write_ha_state()
+
+
+class BluettiDcInputEnergySensor(CoordinatorEntity, RestoreSensor):
+    """Cumulative DC input energy derived from dc_input_power (trapezoidal integration)."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "dc_input_energy"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 3
+
+    def __init__(
+        self,
+        coordinator: PollingCoordinator,
+        device_info: DeviceInfo,
+        polling_interval: int,
+        logger: logging.Logger = logging.getLogger(),
+    ):
+        super().__init__(coordinator)
+        self._attr_device_info = device_info
+        self._attr_unique_id = get_unique_id(
+            f"{device_info.get('name')} dc_input_energy"
+        )
+        self._logger = logger
+        self._max_gap_seconds = max(
+            polling_interval * _DC_ENERGY_MAX_GAP_FACTOR, 60
+        )
+        self._last_power: float | None = None
+        self._last_ts: datetime | None = None
+        self._total_kwh: float = 0.0
+        self._attr_native_value = 0.0
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None and last.native_value is not None:
+            try:
+                self._total_kwh = float(last.native_value)
+            except (TypeError, ValueError):
+                self._total_kwh = 0.0
+        self._attr_native_value = round(self._total_kwh, 3)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if not self.coordinator.last_update_success:
+            return
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return
+        power = data.get(FieldName.DC_INPUT_POWER.value)
+        if not isinstance(power, (int, float)) or isinstance(power, bool):
+            return
+
+        now = dt_util.utcnow()
+        if self._last_power is not None and self._last_ts is not None:
+            dt_seconds = (now - self._last_ts).total_seconds()
+            if 0 < dt_seconds <= self._max_gap_seconds:
+                avg_w = (self._last_power + float(power)) / 2.0
+                self._total_kwh += (avg_w * dt_seconds) / 3_600_000.0
+
+        self._last_power = float(power)
+        self._last_ts = now
+        self._attr_native_value = round(self._total_kwh, 3)
         self.async_write_ha_state()
